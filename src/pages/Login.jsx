@@ -79,7 +79,7 @@ export default function Login() {
           >
             <LogIn size={32} color="var(--accent-primary)" />
           </div>
-          <h2>Welcome Back</h2>
+          <h2>Hello Lads!!</h2>
           <p className="subtitle">Sign in to the Attendance System</p>
 
           <div
