@@ -1,18 +1,41 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import Navbar from '../components/Navbar';
 import { api } from '../utils/api';
 import { format } from 'date-fns';
-import { ShieldAlert, Trash2, MapPinOff, RefreshCw, UploadCloud, Key } from 'lucide-react';
+import { ShieldAlert, Trash2, MapPinOff, RefreshCw, UploadCloud, Key, Search, Lock, Download } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { MapContainer, TileLayer, Marker } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
 import ResponsiveTable from '../components/ResponsiveTable';
+
+// Fix leaflet default icon
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+});
 
 export default function AdminDashboard() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [hoveredLocation, setHoveredLocation] = useState(null);
+  const [hoverStyle, setHoverStyle] = useState({});
   
-  // Import state
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState('');
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+
+  useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const isMobile = windowWidth <= 768;
 
   useEffect(() => {
     fetchUsers();
@@ -27,6 +50,31 @@ export default function AdminDashboard() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleDownloadSample = () => {
+    const sampleData = [
+      {
+        'staff id': 'SK001',
+        'name': 'John Doe',
+        'email': 'john@example.com',
+        'role': 'Staff',
+        'superior email': 'manager@example.com',
+        'superior name': 'Manager Alice'
+      },
+      {
+        'staff id': 'SK002',
+        'name': 'Jane Smith',
+        'email': 'jane@example.com',
+        'role': 'HR',
+        'superior email': 'admin@example.com',
+        'superior name': 'Admin Bob'
+      }
+    ];
+    const worksheet = XLSX.utils.json_to_sheet(sampleData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Sample Users');
+    XLSX.writeFile(workbook, 'SiniHau_User_Import_Sample.xlsx');
   };
 
   const handleRoleChange = async (userId, newRole) => {
@@ -45,6 +93,16 @@ export default function AdminDashboard() {
       fetchUsers();
     } catch (err) {
       alert(err.message || 'Failed to reset location');
+    }
+  };
+
+  const handleResetPassword = async (userId) => {
+    if (!window.confirm("Are you sure you want to reset this user's password to their Staff ID?")) return;
+    try {
+      await api.resetPassword(userId);
+      alert('Password reset successfully to Staff ID.');
+    } catch (err) {
+      alert(err.message || 'Failed to reset password');
     }
   };
 
@@ -154,21 +212,25 @@ export default function AdminDashboard() {
     },
     {
       name: 'Manager',
-      selector: row => row.superiorEmail,
+      selector: row => row.superior_email || row.superiorEmail || row.superior?.email || row.manager_email || row.managerEmail || row.manager?.email,
       sortable: true,
       minWidth: '200px',
-      cell: row => (
-        <div style={{ fontSize: '0.85rem' }}>
-          {row.superiorEmail ? (
-            <>
-              <div style={{ fontWeight: '500' }}>{row.superiorName}</div>
-              <div style={{ color: 'var(--text-muted)' }}>{row.superiorEmail}</div>
-            </>
-          ) : (
-            <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>None</span>
-          )}
-        </div>
-      )
+      cell: row => {
+        const email = row.superior_email || row.superiorEmail || row.superior?.email || row.manager_email || row.managerEmail || row.manager?.email;
+        const name = row.superior_name || row.superiorName || row.superior?.name || row.manager_name || row.managerName || row.manager?.name;
+        return (
+          <div style={{ fontSize: '0.85rem' }}>
+            {email ? (
+              <>
+                <div style={{ fontWeight: '500' }}>{name || 'N/A'}</div>
+                <div style={{ color: 'var(--text-muted)' }}>{email}</div>
+              </>
+            ) : (
+              <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>None</span>
+            )}
+          </div>
+        );
+      }
     },
     {
       name: 'Role',
@@ -197,12 +259,30 @@ export default function AdminDashboard() {
       name: 'Location Status',
       selector: row => row.home_locked,
       sortable: true,
+      allowOverflow: true,
       cell: row => (
-        row.home_locked ? (
-          <span className="badge success">Locked</span>
-        ) : (
-          <span className="badge" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-glass)' }}>Pending</span>
-        )
+        <div 
+          onMouseEnter={(e) => {
+            if (row.home_lat && row.home_lng) {
+              const rect = e.currentTarget.getBoundingClientRect();
+              const mapHeight = 160;
+              const renderAbove = (rect.bottom + mapHeight) > window.innerHeight;
+              
+              setHoverStyle({
+                top: renderAbove ? (rect.top + window.scrollY - mapHeight - 8) : (rect.bottom + window.scrollY + 8),
+                left: rect.left + window.scrollX
+              });
+              setHoveredLocation({ id: row.id, lat: row.home_lat, lng: row.home_lng });
+            }
+          }}
+          onMouseLeave={() => setHoveredLocation(null)}
+        >
+          {row.home_locked ? (
+            <span className="badge success" style={{ cursor: row.home_lat ? 'pointer' : 'default' }}>Locked</span>
+          ) : (
+            <span className="badge" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-glass)' }}>Pending</span>
+          )}
+        </div>
       )
     },
     {
@@ -215,19 +295,27 @@ export default function AdminDashboard() {
             title="Reset Home Location"
             style={{
               background: 'transparent', border: '1px solid var(--warning)', color: 'var(--warning)',
-              padding: '0.5rem', borderRadius: 'var(--radius-md)', cursor: row.home_locked ? 'pointer' : 'not-allowed',
-              opacity: row.home_locked ? 1 : 0.3
+              padding: '0.4rem', borderRadius: ' var(--radius-sm)', cursor: 'pointer', display: 'flex'
             }}
           >
             <MapPinOff size={16} />
           </button>
-          
+          <button 
+            onClick={() => handleResetPassword(row.id)}
+            title="Reset Password to Staff ID"
+            style={{
+              background: 'transparent', border: '1px solid var(--accent-primary)', color: 'var(--accent-primary)',
+              padding: '0.4rem', borderRadius: ' var(--radius-sm)', cursor: 'pointer', display: 'flex'
+            }}
+          >
+            <Lock size={16} />
+          </button>
           <button 
             onClick={() => handleDelete(row.id)}
             title="Delete User"
             style={{
               background: 'transparent', border: '1px solid var(--danger)', color: 'var(--danger)',
-              padding: '0.5rem', borderRadius: 'var(--radius-md)', cursor: 'pointer'
+              padding: '0.4rem', borderRadius: ' var(--radius-sm)', cursor: 'pointer', display: 'flex'
             }}
           >
             <Trash2 size={16} />
@@ -261,31 +349,95 @@ export default function AdminDashboard() {
             <UploadCloud size={20} color="var(--accent-primary)" />
             <h3 style={{ margin: 0 }}>Bulk Import Users from Excel/CSV</h3>
           </div>
-          <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', fontSize: '0.9rem', lineHeight: '1.6' }}>
             Upload an Excel (.xlsx) or CSV file containing user records. The system looks for columns like 'name', 'email', 'role', 'superior email', 'superior name', and <strong>'staff id' (REQUIRED)</strong>. If the staff ID is missing, the row will be skipped.
+            <br />
+            <a 
+              href="#" 
+              onClick={(e) => { e.preventDefault(); handleDownloadSample(); }}
+              style={{ 
+                display: 'inline-flex', 
+                alignItems: 'center', 
+                gap: '0.4rem', 
+                color: 'var(--accent-primary)', 
+                textDecoration: 'none', 
+                fontWeight: 'bold',
+                marginTop: '0.75rem',
+                fontSize: '0.85rem'
+              }}
+            >
+              <Download size={16} />
+              Download sample Excel template
+            </a>
           </p>
           
-          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ position: 'relative' }}>
             <input 
               type="file" 
               accept=".xlsx, .xls, .csv"
               onChange={handleFileUpload}
               disabled={importing}
-              style={{
-                fontFamily: 'inherit',
-                border: '1px solid var(--border-glass)',
-                padding: '0.5rem',
-                borderRadius: 'var(--radius-md)',
-                color: 'var(--text-primary)',
-                background: 'rgba(255, 255, 255, 0.05)'
-              }}
+              id="bulk-import-input"
+              style={{ display: 'none' }}
             />
-            {importing && (
-              <span style={{ color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <RefreshCw size={18} className="animate-spin" />
-                Importing...
-              </span>
-            )}
+            <label 
+              htmlFor="bulk-import-input"
+              className="glass-panel"
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '3rem 2rem',
+                border: '2px dashed var(--border-glass)',
+                borderRadius: 'var(--radius-lg)',
+                background: 'rgba(255, 255, 255, 0.02)',
+                cursor: importing ? 'not-allowed' : 'pointer',
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                width: '100%',
+                gap: '1rem',
+                opacity: importing ? 0.6 : 1,
+                transform: 'translateZ(0)',
+              }}
+              onMouseEnter={(e) => {
+                if (!importing) {
+                  e.currentTarget.style.border = '2px dashed var(--accent-primary)';
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+                  e.currentTarget.style.boxShadow = '0 0 20px rgba(99, 102, 241, 0.1)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.border = '2px dashed var(--border-glass)';
+                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.02)';
+                e.currentTarget.style.boxShadow = 'none';
+              }}
+            >
+              <div style={{
+                background: importing ? 'var(--bg-secondary)' : 'var(--accent-glow)',
+                width: '64px',
+                height: '64px',
+                borderRadius: '50%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginBottom: '0.5rem',
+                transition: 'transform 0.3s'
+              }}>
+                <UploadCloud 
+                  size={32} 
+                  color={importing ? 'var(--text-muted)' : 'var(--accent-primary)'} 
+                  className={importing ? 'animate-bounce' : ''} 
+                />
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <h4 style={{ margin: '0 0 0.25rem 0', fontSize: '1.1rem' }}>
+                  {importing ? 'Processing File...' : 'Click to Browse or Drag & Drop'}
+                </h4>
+                <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                  Excel (.xlsx, .xls) or CSV files supported
+                </p>
+              </div>
+            </label>
           </div>
 
           {importResult && (
@@ -297,15 +449,49 @@ export default function AdminDashboard() {
 
         {/* Users Table Section */}
         <div className="glass-panel animate-fade-in" style={{ padding: '2rem', animationDelay: '0.1s' }}>
+          <div className="flex-between" style={{ marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+            <h3 style={{ margin: 0 }}>User Management List</h3>
+            <div style={{ position: 'relative', width: isMobile ? '100%' : 'auto' }}>
+              <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+              <input 
+                type="text" 
+                placeholder="Search staff details..." 
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                style={{ padding: '0.65rem 1rem 0.65rem 2.2rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-glass)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', width: isMobile ? '100%' : '250px', outline: 'none' }}
+              />
+            </div>
+          </div>
           <ResponsiveTable
-            title={<h3 style={{ margin: 0 }}>User Management List</h3>}
             columns={columns}
-            data={users}
+            data={users.filter(user => 
+              user.name?.toLowerCase().includes(searchQuery.toLowerCase()) || 
+              user.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+              user.staffId?.toLowerCase().includes(searchQuery.toLowerCase())
+            )}
             progressPending={loading}
             pagination
           />
         </div>
       </div>
+
+      {/* Global Hover Map Portal */}
+      {hoveredLocation && createPortal(
+        <div style={{
+          position: 'absolute', zIndex: 9999,
+          ...hoverStyle,
+          width: '200px', height: '150px', borderRadius: '8px', 
+          overflow: 'hidden', border: '2px solid var(--border-glass)',
+          boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
+        }}>
+          <MapContainer center={[hoveredLocation.lat, hoveredLocation.lng]} zoom={15} style={{ height: '100%', width: '100%' }} zoomControl={false} dragging={false} scrollWheelZoom={false}>
+            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+            <Marker position={[hoveredLocation.lat, hoveredLocation.lng]} />
+          </MapContainer>
+        </div>,
+        document.body
+      )}
+
     </div>
   );
 }

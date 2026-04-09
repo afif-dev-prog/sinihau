@@ -79,8 +79,8 @@ export default function Login() {
           >
             <LogIn size={32} color="var(--accent-primary)" />
           </div>
-          <h2>Welcome back</h2>
-          <p className="subtitle">Sign in to the Attendance System</p>
+          <h2>Sign In to SiniHau</h2>
+          <p className="subtitle">SiniHau Attendance System</p>
 
           <div
             className="flex-center"
@@ -201,44 +201,30 @@ export default function Login() {
         </div>
 
         <button
-          onClick={handleOIDCLogin}
+          disabled
           style={{
             width: "100%",
             padding: "0.85rem",
-            background: "var(--bg-secondary)",
-            color: "var(--text-primary)",
+            background: "rgba(255,255,255,0.02)",
+            color: "var(--text-muted)",
             border: "1px solid var(--border-glass)",
             borderRadius: "var(--radius-md)",
             fontSize: "1rem",
             fontWeight: "500",
-            cursor: "pointer",
+            cursor: "not-allowed",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             gap: "0.5rem",
-            transition: "all var(--transition-fast)",
+            position: 'relative'
           }}
-          onMouseOver={(e) =>
-            (e.currentTarget.style.background = "rgba(255,255,255,0.05)")
-          }
-          onMouseOut={(e) =>
-            (e.currentTarget.style.background = "var(--bg-secondary)")
-          }
         >
           <KeyRound size={20} />
-          Sign in with Company Provider
+          Sign in with SSOne
+          <span style={{ fontSize: '0.7rem', position: 'absolute', bottom: '-20px', left: '50%', transform: 'translateX(-50%)', whiteSpace: 'nowrap' }}>
+            Coming soon!
+          </span>
         </button>
-
-        <p
-          style={{
-            textAlign: "center",
-            marginTop: "1.5rem",
-            fontSize: "0.85rem",
-            color: "var(--text-muted)",
-          }}
-        >
-          Test Accounts: admin@, hr@, staff@ (password123)
-        </p>
       </div>
     </div>
   );
