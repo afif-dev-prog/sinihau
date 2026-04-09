@@ -82,7 +82,13 @@ export default function HRDashboard() {
   const fetchStaff = async () => {
     setLoading(true);
     try {
-      const data = await api.getHrStaff(`?search=${search}&date=${date}`);
+      let timestamp = '';
+      if (date) {
+        const [year, month, day] = date.split('-').map(Number);
+        const localDate = new Date(year, month - 1, day);
+        timestamp = Math.floor(localDate.getTime() / 1000);
+      }
+      const data = await api.getHrStaff(`?search=${search}&date=${timestamp}`);
       setStaff(data);
     } catch (err) {
       console.error(err);
@@ -633,7 +639,7 @@ export default function HRDashboard() {
                  <PieChart size={36} color="var(--accent-primary)" style={{ marginBottom: '1rem' }} />
                  <h3 style={{ margin: '0 0 0.5rem 0' }}>Punctuality Rate</h3>
                  <div style={{ fontSize: '2.5rem', fontWeight: 'bold', color: 'var(--success)' }}>{punctualityRate}%</div>
-                 <p style={{ color: 'var(--text-muted)', margin: 0, textAlign: 'center', fontSize: '0.9rem' }}>Clocked in â‰¤ 8:00 AM</p>
+                 <p style={{ color: 'var(--text-muted)', margin: 0, textAlign: 'center', fontSize: '0.9rem' }}>Clocked in before or at 8:00 AM</p>
                </div>
 
                <div style={{ background: 'var(--bg-secondary)', padding: '2rem', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-glass)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>

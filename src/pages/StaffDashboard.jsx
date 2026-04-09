@@ -576,17 +576,19 @@ export default function StaffDashboard() {
                     You are outside the permitted area. Do you want to force bypass?
                   </div>
 
-                  <div className="animate-fade-in" style={{ width: '100%', maxWidth: '100%', marginBottom: '0.5rem' }}>
-                    <label style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem' }}>Reason for Late / Out of Bounds *</label>
-                    <textarea 
-                      value={remark} 
-                      onChange={(e) => setRemark(e.target.value)}
-                      placeholder="Enter bypass remark (max 100 chars)"
-                      maxLength={100}
-                      rows={2}
-                      style={{ width: '100%', padding: '0.85rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-glass)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none', resize: 'none' }} 
-                    />
-                  </div>
+                  {bypassPrompt === 'in' && (
+                    <div className="animate-fade-in" style={{ width: '100%', maxWidth: '100%', marginBottom: '0.5rem' }}>
+                      <label style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem' }}>Reason for Late / Out of Bounds *</label>
+                      <textarea 
+                        value={remark} 
+                        onChange={(e) => setRemark(e.target.value)}
+                        placeholder="Enter bypass remark (max 100 chars)"
+                        maxLength={100}
+                        rows={2}
+                        style={{ width: '100%', padding: '0.85rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-glass)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none', resize: 'none' }} 
+                      />
+                    </div>
+                  )}
 
                   {bypassCoords && bypassCoords.lat && bypassCoords.lng && (
                     <div style={{ width: '100%', marginBottom: '1rem', marginTop: '0.5rem' }}>

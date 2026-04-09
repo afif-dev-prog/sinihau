@@ -319,7 +319,7 @@ tr:hover td {
   position: absolute;
   top: 0;
   right: 100%;
-  margin-right: 4px;
+  margin-right: 8px; /* Slightly larger gap for aesthetics */
   width: 160px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-glass);
@@ -328,4 +328,15 @@ tr:hover td {
   display: flex;
   flex-direction: column;
   box-shadow: var(--shadow-lg);
+}
+
+/* Invisible bridge to prevent mouse-leave when moving to the nested menu */
+.nested-menu::before {
+  content: '';
+  position: absolute;
+  top: -10px;
+  right: -15px;
+  width: 20px;
+  height: calc(100% + 20px);
+  z-index: -1;
 }
