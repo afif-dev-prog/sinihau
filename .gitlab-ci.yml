@@ -1,0 +1,20 @@
+stages:
+  - build
+  - deploy
+
+build:
+  stage: build
+  script:
+    - npm install
+    - ng run build
+  artifacts:
+    paths:
+      - dist/
+
+deploy:
+  stage: deploy
+  script:
+    - scp -r dist/* /usr/share/nginx/html/attendance
+    - sudo systemctl reload nginx
+  only:
+    - master
