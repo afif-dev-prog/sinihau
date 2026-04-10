@@ -3,6 +3,7 @@ import Navbar from '../components/Navbar';
 import { api } from '../utils/api';
 import { Users, UserCheck, UserX, Search, Map as MapIcon, Calendar as CalendarIcon, AlertTriangle, Star, Clock, FileSpreadsheet, FileText, PieChart, Download, ChevronDown, ChevronRight } from 'lucide-react';
 import { format } from 'date-fns';
+import { getNowInTargetTimezone, formatTimeInTargetTimezone, isPunctual } from '../utils/dateUtils';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import ResponsiveTable from '../components/ResponsiveTable';
 import * as XLSX from 'xlsx';
@@ -28,7 +29,7 @@ export default function HRDashboard() {
   const [stats, setStats] = useState({ totalStaff: 0, clockedIn: 0, clockedOut: 0, notClockedIn: 0 });
   const [staff, setStaff] = useState([]);
   const [search, setSearch] = useState('');
-  const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [date, setDate] = useState(format(getNowInTargetTimezone(), 'yyyy-MM-dd'));
   const [viewMode, setViewMode] = useState('list'); // 'list' | 'map'
   const [activeTab, setActiveTab] = useState('ledger');
   const [loading, setLoading] = useState(true);
@@ -84,9 +85,11 @@ export default function HRDashboard() {
     try {
       let timestamp = '';
       if (date) {
+        // The backend appears to expect a timestamp that corresponds to the intended date in UTC.
+        // Previously, we tried to send Malaysia midnight, but that resolved to the previous day in UTC.
         const [year, month, day] = date.split('-').map(Number);
-        const localDate = new Date(year, month - 1, day);
-        timestamp = Math.floor(localDate.getTime() / 1000);
+        const dateObj = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+        timestamp = Math.floor(dateObj.getTime() / 1000);
       }
       const data = await api.getHrStaff(`?search=${search}&date=${timestamp}`);
       setStaff(data);
@@ -107,7 +110,7 @@ export default function HRDashboard() {
 
   const calculateTotalTime = (inTime, outTime) => {
     if (!inTime || !outTime) return '--';
-    const diff = new Date(outTime * 1000) - new Date(inTime * 1000);
+    const diff = (outTime * 1000) - (inTime * 1000);
     if (diff <= 0) return '--';
     const hours = Math.floor(diff / (1000 * 60 * 60));
     const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
@@ -121,8 +124,8 @@ export default function HRDashboard() {
       Name: s.name,
       Email: s.email,
       Status: s.todayStatus,
-      'Clock In': s.clockInTime ? format(new Date(s.clockInTime * 1000), 'hh:mm a') : '--',
-      'Clock Out': s.clockOutTime ? format(new Date(s.clockOutTime * 1000), 'hh:mm a') : '--',
+      'Clock In': formatTimeInTargetTimezone(s.clockInTime),
+      'Clock Out': formatTimeInTargetTimezone(s.clockOutTime),
       'Total Hours': calculateTotalTime(s.clockInTime, s.clockOutTime),
       Bypassed: s.isBypassed ? 'Yes' : 'No',
       Rating: s.rating || '--'
@@ -169,11 +172,7 @@ export default function HRDashboard() {
     if (staff.length === 0) return 0;
     const present = staff.filter(s => s.todayStatus === 'Clocked In' || s.todayStatus === 'Clocked Out');
     if (present.length === 0) return 0;
-    const punctualCount = present.filter(s => {
-      if (!s.clockInTime) return false;
-      const d = new Date(s.clockInTime * 1000);
-      return d.getHours() < 8 || (d.getHours() === 8 && d.getMinutes() === 0);
-    }).length;
+    const punctualCount = present.filter(s => isPunctual(s.clockInTime, 8, 0)).length;
     return Math.round((punctualCount / present.length) * 100);
   };
   const punctualityRate = calculatePunctuality();
@@ -249,7 +248,7 @@ export default function HRDashboard() {
       name: 'Clock In',
       selector: row => row.clockInTime,
       sortable: true,
-      cell: row => row.clockInTime ? format(new Date(row.clockInTime * 1000), 'hh:mm a') : '--'
+      cell: row => formatTimeInTargetTimezone(row.clockInTime)
     },
     {
       name: 'Valid/Bypassed',
@@ -273,7 +272,7 @@ export default function HRDashboard() {
       name: 'Clock Out',
       selector: row => row.clockOutTime,
       sortable: true,
-      cell: row => row.clockOutTime ? format(new Date(row.clockOutTime * 1000), 'hh:mm a') : '--'
+      cell: row => formatTimeInTargetTimezone(row.clockOutTime)
     },
     {
       name: 'Total Hours',
@@ -682,7 +681,7 @@ export default function HRDashboard() {
                        <div style={{ position: 'absolute', bottom: -5, right: -5, width: '24px', height: '24px', borderRadius: '50%', background: '#dfe6e9', color: '#636e72', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', border: '2px solid var(--bg-secondary)' }}>2</div>
                      </div>
                      <div style={{ fontWeight: '500', textAlign: 'center' }}>{top10Punctual[1].name.split(' ')[0]}</div>
-                     <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{format(new Date(top10Punctual[1].clockInTime * 1000), 'hh:mm a')}</div>
+                     <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{formatTimeInTargetTimezone(top10Punctual[1].clockInTime)}</div>
                      <div style={{ width: '80px', height: '100px', background: 'linear-gradient(to top, rgba(255,255,255,0.05), rgba(255,255,255,0.1))', borderRadius: 'var(--radius-md) var(--radius-md) 0 0', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         <Clock size={20} color="rgba(255,255,255,0.2)" />
                      </div>
@@ -700,7 +699,7 @@ export default function HRDashboard() {
                        <div style={{ position: 'absolute', bottom: -5, right: -5, width: '28px', height: '28px', borderRadius: '50%', background: '#ffd700', color: '#d35400', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem', border: '2px solid var(--bg-secondary)' }}>1</div>
                      </div>
                      <div style={{ fontWeight: 'bold', textAlign: 'center', fontSize: '1.1rem' }}>{top10Punctual[0].name.split(' ')[0]}</div>
-                     <div style={{ fontSize: '0.85rem', color: 'var(--success)', fontWeight: 'bold' }}>{format(new Date(top10Punctual[0].clockInTime * 1000), 'hh:mm a')}</div>
+                      <div style={{ fontSize: '0.85rem', color: 'var(--success)', fontWeight: 'bold' }}>{formatTimeInTargetTimezone(top10Punctual[0].clockInTime)}</div>
                      <div style={{ width: '100px', height: '140px', background: 'linear-gradient(to top, var(--accent-glow), rgba(99, 102, 241, 0.2))', borderRadius: 'var(--radius-md) var(--radius-md) 0 0', border: '1px solid var(--accent-primary)', borderBottom: 'none' }}></div>
                    </div>
                  )}
@@ -715,7 +714,7 @@ export default function HRDashboard() {
                        <div style={{ position: 'absolute', bottom: -5, right: -5, width: '24px', height: '24px', borderRadius: '50%', background: '#cd7f32', color: 'white', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', border: '2px solid var(--bg-secondary)' }}>3</div>
                      </div>
                      <div style={{ fontWeight: '500', textAlign: 'center' }}>{top10Punctual[2].name.split(' ')[0]}</div>
-                     <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{format(new Date(top10Punctual[2].clockInTime * 1000), 'hh:mm a')}</div>
+                     <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{formatTimeInTargetTimezone(top10Punctual[2].clockInTime)}</div>
                      <div style={{ width: '80px', height: '70px', background: 'linear-gradient(to top, rgba(255,255,255,0.03), rgba(255,255,255,0.07))', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}></div>
                    </div>
                  )}
@@ -760,7 +759,7 @@ export default function HRDashboard() {
                            </div>
                          </td>
                          <td style={{ fontWeight: 'bold', color: idx === 0 ? 'var(--success)' : 'inherit' }}>
-                           {format(new Date(person.clockInTime * 1000), 'hh:mm a')}
+                           {formatTimeInTargetTimezone(person.clockInTime)}
                          </td>
                          <td>
                             <span className="badge success" style={{ fontSize: '0.7rem' }}>Punctual</span>
