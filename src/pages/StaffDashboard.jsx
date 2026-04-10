@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../App';
 import Navbar from '../components/Navbar';
 import { api } from '../utils/api';
+import { isTimestampToday, formatDateInTargetTimezone, formatTimeInTargetTimezone } from '../utils/dateUtils';
 import { MapPin, Clock, CheckCircle, XCircle, Users, Search } from 'lucide-react';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -263,16 +264,8 @@ export default function StaffDashboard() {
   // Check if the most recent attendance record is from today.
   // If yesterday's shift was completed, status.clockedOut is still true —
   // so we verify against the latest history timestamp before trusting it.
-  const isTimestampToday = (timestamp) => {
-    if (!timestamp) return false;
-    const d = new Date(timestamp * 1000);
-    const n = new Date();
-    return (
-      d.getFullYear() === n.getFullYear() &&
-      d.getMonth() === n.getMonth() &&
-      d.getDate() === n.getDate()
-    );
-  };
+  // Removed local isTimestampToday and replaced with utility call
+
   const latestTimestamp =
     history.length > 0 ? Math.max(...history.map((r) => r.timestamp)) : null;
   const hasActivityToday = isTimestampToday(latestTimestamp);
@@ -334,16 +327,13 @@ export default function StaffDashboard() {
       width: '60px'
     },
     {
-      name: 'Date',
-      selector: row => row.timestamp,
-      sortable: true,
-      cell: row => format(new Date(row.timestamp * 1000), 'MMM dd, yyyy')
+      cell: row => formatDateInTargetTimezone(row.timestamp)
     },
     {
       name: 'Time',
       selector: row => row.timestamp,
       sortable: true,
-      cell: row => format(new Date(row.timestamp * 1000), 'hh:mm a')
+      cell: row => formatTimeInTargetTimezone(row.timestamp)
     },
     {
       name: 'Action',
