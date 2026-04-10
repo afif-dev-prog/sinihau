@@ -73,15 +73,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify(coords),
     }),
-  clockIn: (coords) =>
+  clockIn: (payload) =>
     fetchWithAuth("/attendance/clock-in", {
       method: "POST",
-      body: JSON.stringify(coords),
+      body: JSON.stringify(payload),
     }),
-  clockOut: (coords) =>
+  clockOut: (payload) =>
     fetchWithAuth("/attendance/clock-out", {
       method: "POST",
-      body: JSON.stringify(coords),
+      body: JSON.stringify(payload),
     }),
   getStatus: () => fetchWithAuth("/attendance/status"),
   getHistory: () => fetchWithAuth("/attendance/history"),
@@ -99,6 +99,8 @@ export const api = {
     }),
   resetLocation: (userId) =>
     fetchWithAuth(`/admin/users/${userId}/reset-location`, { method: "POST" }),
+  resetPassword: (userId) =>
+    fetchWithAuth(`/admin/users/${userId}/reset-password`, { method: "POST" }),
   deleteUser: (userId) =>
     fetchWithAuth(`/admin/users/${userId}`, { method: "DELETE" }),
   updateRole: (userId, role) =>

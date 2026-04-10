@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import Navbar from '../components/Navbar';
 import { api } from '../utils/api';
-import { Users, UserCheck, UserX, AlertTriangle, Star, Clock } from 'lucide-react';
+import { Users, UserCheck, UserX, AlertTriangle, Star, Clock, Search } from 'lucide-react';
 import { format } from 'date-fns';
 import ResponsiveTable from '../components/ResponsiveTable';
 
 export default function SuperiorDashboard() {
   const [teamObj, setTeamObj] = useState({ team: [], stats: { totalTeam: 0, clockedIn: 0, clockedOut: 0, notClockedIn: 0, bypassesToday: 0 } });
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
     fetchTeam();
@@ -181,13 +182,28 @@ export default function SuperiorDashboard() {
         </div>
 
         <div className="glass-panel animate-fade-in" style={{ padding: '2rem' }}>
+          <div className="flex-between" style={{ marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+            <h2 style={{ margin: 0 }}>Team Attendance Ledger</h2>
+            <div style={{ position: 'relative' }}>
+              <Search size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+              <input 
+                type="text" 
+                placeholder="Search team..." 
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{ paddingLeft: '2.8rem', width: '250px' }}
+              />
+            </div>
+          </div>
           {loading ? (
             <p>Loading team records...</p>
           ) : (
             <ResponsiveTable
-              title={<h2 style={{ margin: 0, paddingBottom: '1rem' }}>Team Attendance Ledger</h2>}
               columns={columns}
-              data={teamObj.team}
+              data={teamObj.team.filter(m => 
+                m.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                m.email.toLowerCase().includes(searchQuery.toLowerCase())
+              )}
               pagination
             />
           )}
