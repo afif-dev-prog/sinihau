@@ -105,7 +105,7 @@ export default function Navbar() {
             <Navigation size={isMobile ? 20 : 24} color="var(--accent-primary)" />
           </div>
           <h3 style={{ margin: 0, display: windowWidth > 640 ? 'block' : 'none', fontSize: isMobile ? '1.1rem' : '1.3rem' }}>
-            Attendance<span style={{color: 'var(--accent-primary)'}}>Sync</span>
+            Sini<span style={{color: 'var(--accent-primary)'}}>Hau</span>
           </h3>
         </div>
         
