@@ -3,6 +3,7 @@ import Navbar from '../components/Navbar';
 import { api } from '../utils/api';
 import { Users, UserCheck, UserX, AlertTriangle, Star, Clock, Search } from 'lucide-react';
 import { format } from 'date-fns';
+import { formatTimeInTargetTimezone } from '../utils/dateUtils';
 import ResponsiveTable from '../components/ResponsiveTable';
 
 export default function SuperiorDashboard() {
@@ -47,7 +48,7 @@ export default function SuperiorDashboard() {
 
   const calculateTotalTime = (inTime, outTime) => {
     if (!inTime || !outTime) return '--';
-    const diff = new Date(outTime * 1000) - new Date(inTime * 1000);
+    const diff = (outTime * 1000) - (inTime * 1000);
     if (diff <= 0) return '--';
     const hours = Math.floor(diff / (1000 * 60 * 60));
     const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
@@ -126,13 +127,13 @@ export default function SuperiorDashboard() {
       name: 'Clock In',
       selector: row => row.clockInTime,
       sortable: true,
-      cell: row => row.clockInTime ? format(new Date(row.clockInTime * 1000), 'hh:mm a') : '--'
+      cell: row => formatTimeInTargetTimezone(row.clockInTime)
     },
     {
       name: 'Clock Out',
       selector: row => row.clockOutTime,
       sortable: true,
-      cell: row => row.clockOutTime ? format(new Date(row.clockOutTime * 1000), 'hh:mm a') : '--'
+      cell: row => formatTimeInTargetTimezone(row.clockOutTime)
     },
     {
       name: 'Total Hours',
