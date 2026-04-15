@@ -2,11 +2,15 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../App';
 import Navbar from '../components/Navbar';
 import { api } from '../utils/api';
-import { isTimestampToday, formatDateInTargetTimezone, formatTimeInTargetTimezone } from '../utils/dateUtils';
-import { MapPin, Clock, CheckCircle, XCircle, Users, Search } from 'lucide-react';
+import { isTimestampToday, formatDateInTargetTimezone, formatTimeInTargetTimezone, isPunctual, getNowInTargetTimezone } from '../utils/dateUtils';
+import { MapPin, Clock, CheckCircle, XCircle, Users, Search, TrendingUp, BarChart as BarIcon, PieChart as PieIcon, LayoutDashboard, History, Activity, Award } from 'lucide-react';
+import { PieChart as RePieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts';
+import { format } from 'date-fns';
+import { useNavigate } from 'react-router-dom';
+import ResponsiveTable from '../components/ResponsiveTable';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { MapContainer, TileLayer, Marker, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, useMap, Popup } from 'react-leaflet';
 
 // Fix Leaflet default marker icons broken by Vite's asset pipeline
 delete L.Icon.Default.prototype._getIconUrl;
@@ -45,9 +49,6 @@ function DraggableMarker({ position, onPositionChange }) {
     />
   );
 }
-import { format } from 'date-fns';
-import { useNavigate } from 'react-router-dom';
-import ResponsiveTable from '../components/ResponsiveTable';
 
 export default function StaffDashboard() {
   const { user, setUser } = useAuth();
@@ -61,7 +62,17 @@ export default function StaffDashboard() {
   const [todaysJob, setTodaysJob] = useState('');
   const [isSuperior, setIsSuperior] = useState(false);
   const [showMiniMap, setShowMiniMap] = useState(false);
+  const [activeTab, setActiveTab] = useState('logs');
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const isMobile = windowWidth <= 768;
   
   // Modal state
   const [showHomeModal, setShowHomeModal] = useState(!user?.home_locked);
@@ -75,6 +86,14 @@ export default function StaffDashboard() {
     fetchStatus();
     fetchHistory();
     checkIfSuperior();
+
+    // Auto-refresh data and check for day rollover every minute
+    // This allows users who leave the tab open overnight to clock in when the new day arrives
+    const interval = setInterval(() => {
+      fetchStatus();
+      fetchHistory();
+    }, 60000);
+    return () => clearInterval(interval);
   }, []);
 
   // Auto-fetch GPS to pre-position the map marker when the home modal opens
@@ -327,6 +346,9 @@ export default function StaffDashboard() {
       width: '60px'
     },
     {
+      name: 'Date',
+      selector: row => row.timestamp,
+      sortable: true,
       cell: row => formatDateInTargetTimezone(row.timestamp)
     },
     {
@@ -365,6 +387,67 @@ export default function StaffDashboard() {
       )
     }
   ];
+
+  // Calculate Personal Analytics
+  const personalStats = React.useMemo(() => {
+    if (history.length === 0) return null;
+
+    const days = {};
+    history.forEach(log => {
+      const dateKey = formatDateInTargetTimezone(log.timestamp);
+      if (!days[dateKey]) days[dateKey] = { in: null, out: null, isBypassed: false };
+      if (log.type === 'CLOCK_IN') days[dateKey].in = log.timestamp;
+      if (log.type === 'CLOCK_OUT') days[dateKey].out = log.timestamp;
+      if (!log.isWithinRadius) days[dateKey].isBypassed = true;
+    });
+
+    const dayList = Object.values(days).filter(d => d.in);
+    const totalDays = dayList.length;
+    
+    let totalPunctual = 0;
+    let totalHours = 0;
+    let avgClockInMinutes = 0;
+    const workHoursTrend = [];
+
+    dayList.forEach(day => {
+      // Punctuality check (8:00 AM)
+      if (isPunctual(day.in, 8, 0)) totalPunctual++;
+      
+      // Work hours
+      if (day.out) {
+        const hours = (day.out - day.in) / 3600;
+        if (hours > 0) {
+          totalHours += hours;
+          workHoursTrend.push({
+            date: formatDateInTargetTimezone(day.in).split(' ')[0], // Short date
+            hours: parseFloat(hours.toFixed(2))
+          });
+        }
+      }
+
+      // Avg clock in
+      const date = new Date(day.in * 1000);
+      const malaysianDate = new Date(date.toLocaleString("en-US", {timeZone: "Asia/Kuala_Lumpur"}));
+      avgClockInMinutes += (malaysianDate.getHours() * 60) + malaysianDate.getMinutes();
+    });
+
+    const avgClockInRaw = totalDays > 0 ? avgClockInMinutes / totalDays : 0;
+    const avgHH = Math.floor(avgClockInRaw / 60);
+    const avgMM = Math.floor(avgClockInRaw % 60);
+
+    return {
+      totalDays,
+      punctualityRate: totalDays > 0 ? Math.round((totalPunctual / totalDays) * 100) : 0,
+      totalHours: totalHours.toFixed(1),
+      avgHours: totalDays > 0 ? (totalHours / totalDays).toFixed(1) : 0,
+      avgClockIn: `${avgHH.toString().padStart(2, '0')}:${avgMM.toString().padStart(2, '0')}`,
+      workHoursTrend: workHoursTrend.slice(-10), // Last 10 days
+      punctualityData: [
+        { name: 'Punctual', value: totalPunctual },
+        { name: 'Late', value: totalDays - totalPunctual }
+      ]
+    };
+  }, [history]);
 
   return (
     <div>
@@ -688,21 +771,128 @@ export default function StaffDashboard() {
           )}
         </div>
 
-        {/* Right Column: History */}
-        <div className="glass-panel animate-fade-in" style={{ padding: '2.5rem', animationDelay: '0.1s' }}>
-          {history.length === 0 ? (
-            <div>
-              <h2 style={{ margin: 0, marginBottom: '2.5rem' }}>Attendance History</h2>
-              <p style={{ color: 'var(--text-muted)' }}>No attendance records found.</p>
-            </div>
-          ) : (
-            <ResponsiveTable
-              title={<h2 style={{ margin: 0, paddingBottom: '1rem' }}>Attendance History</h2>}
-              columns={columns}
-              data={history}
-              pagination
-            />
-          )}
+        {/* Right Column: History & Analytics Tabs */}
+        <div className="glass-panel animate-fade-in" style={{ padding: '0', animationDelay: '0.1s', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          
+          {/* Tab Navigation */}
+          <div style={{ display: 'flex', borderBottom: '1px solid var(--border-glass)' }}>
+            <button 
+              onClick={() => setActiveTab('logs')}
+              style={{
+                flex: 1, padding: '1.25rem', border: 'none', background: activeTab === 'logs' ? 'var(--accent-glow)' : 'transparent',
+                color: activeTab === 'logs' ? 'var(--accent-primary)' : 'var(--text-muted)', fontWeight: 'bold',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', cursor: 'pointer', transition: 'all 0.2s'
+              }}
+            >
+              <History size={18} /> Attendance Logs
+            </button>
+            <button 
+              onClick={() => setActiveTab('analytics')}
+              style={{
+                flex: 1, padding: '1.25rem', border: 'none', background: activeTab === 'analytics' ? 'var(--accent-glow)' : 'transparent',
+                color: activeTab === 'analytics' ? 'var(--accent-primary)' : 'var(--text-muted)', fontWeight: 'bold',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', cursor: 'pointer', transition: 'all 0.2s'
+              }}
+            >
+              <TrendingUp size={18} /> My Analytics
+            </button>
+          </div>
+
+          <div style={{ padding: '2rem', flex: 1, overflowY: 'auto' }}>
+            {activeTab === 'logs' ? (
+              history.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '3rem' }}>
+                  <History size={48} color="var(--text-muted)" style={{ marginBottom: '1rem', opacity: 0.3 }} />
+                  <p style={{ color: 'var(--text-muted)' }}>No attendance records found.</p>
+                </div>
+              ) : (
+                <ResponsiveTable
+                  title={<h2 style={{ margin: 0, paddingBottom: '1.5rem' }}>Recent Attendance</h2>}
+                  columns={columns}
+                  data={history}
+                  pagination
+                />
+              )
+            ) : (
+              /* Analytics Tab Content */
+              <div className="animate-fade-in">
+                <h2 style={{ margin: 0, marginBottom: '2rem' }}>Personal Stats Overview</h2>
+                
+                {!personalStats ? (
+                  <div style={{ textAlign: 'center', padding: '3rem' }}>
+                    <Activity size={48} color="var(--text-muted)" style={{ marginBottom: '1rem', opacity: 0.3 }} />
+                    <p style={{ color: 'var(--text-muted)' }}>Not enough data to generate analytics yet.</p>
+                  </div>
+                ) : (
+                  <>
+                    {/* KPI Cards */}
+                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, 1fr)', gap: '1rem', marginBottom: '2.5rem' }}>
+                       <div className="glass-panel" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.03)' }}>
+                          <Award size={24} color="var(--warning)" />
+                          <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{personalStats.punctualityRate}%</div>
+                          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: '500' }}>Punctuality</div>
+                       </div>
+                       <div className="glass-panel" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.03)' }}>
+                          <Clock size={24} color="var(--accent-primary)" />
+                          <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{personalStats.avgClockIn}</div>
+                          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: '500' }}>Avg Clock In</div>
+                       </div>
+                       <div className="glass-panel" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.03)' }}>
+                          <LayoutDashboard size={24} color="var(--success)" />
+                          <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{personalStats.avgHours}h</div>
+                          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: '500' }}>Avg Daily Work</div>
+                       </div>
+                    </div>
+
+                    {/* Charts */}
+                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '2rem' }}>
+                       {/* Punctuality Pie */}
+                       <div className="glass-panel" style={{ padding: '1.5rem', borderRadius: 'var(--radius-lg)', minHeight: '300px' }}>
+                          <h3 style={{ fontSize: '1rem', marginBottom: '1rem', color: 'var(--text-secondary)' }}>Attendance Reliability</h3>
+                          <div style={{ height: '200px' }}>
+                             <ResponsiveContainer width="100%" height="100%">
+                                <RePieChart>
+                                   <Pie
+                                      data={personalStats.punctualityData}
+                                      cx="50%" cy="50%" innerRadius={50} outerRadius={70} paddingAngle={5} dataKey="value"
+                                   >
+                                      <Cell fill="var(--success)" />
+                                      <Cell fill="var(--danger)" />
+                                   </Pie>
+                                   <Tooltip contentStyle={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)' }} />
+                                   <Legend verticalAlign="bottom" height={36}/>
+                                </RePieChart>
+                             </ResponsiveContainer>
+                          </div>
+                       </div>
+
+                       {/* Hours Trend */}
+                       <div className="glass-panel" style={{ padding: '1.5rem', borderRadius: 'var(--radius-lg)', minHeight: '300px' }}>
+                          <h3 style={{ fontSize: '1rem', marginBottom: '1rem', color: 'var(--text-secondary)' }}>Work Hours (Last 10 Logs)</h3>
+                          <div style={{ height: '200px' }}>
+                             <ResponsiveContainer width="100%" height="100%">
+                                <AreaChart data={personalStats.workHoursTrend}>
+                                   <defs>
+                                      <linearGradient id="colorHours" x1="0" y1="0" x2="0" y2="1">
+                                         <stop offset="5%" stopColor="var(--accent-primary)" stopOpacity={0.8}/>
+                                         <stop offset="95%" stopColor="var(--accent-primary)" stopOpacity={0}/>
+                                      </linearGradient>
+                                   </defs>
+                                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                                   <XAxis dataKey="date" stroke="var(--text-muted)" fontSize={10} tickLine={false} axisLine={false} />
+                                   <YAxis stroke="var(--text-muted)" fontSize={10} tickLine={false} axisLine={false} />
+                                   <Tooltip contentStyle={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-glass)' }} />
+                                   <Area type="monotone" dataKey="hours" stroke="var(--accent-primary)" fillOpacity={1} fill="url(#colorHours)" />
+                                </AreaChart>
+                             </ResponsiveContainer>
+                          </div>
+                       </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

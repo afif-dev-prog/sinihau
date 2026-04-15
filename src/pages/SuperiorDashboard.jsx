@@ -139,6 +139,18 @@ export default function SuperiorDashboard() {
       name: 'Total Hours',
       selector: row => calculateTotalTime(row.clockInTime, row.clockOutTime),
       sortable: true
+    },
+    {
+      name: 'Remark',
+      selector: row => row.remark,
+      sortable: true,
+      cell: row => <span style={{ color: row.remark ? 'inherit' : 'var(--text-muted)' }}>{row.remark || '--'}</span>
+    },
+    {
+      name: 'Today\'s Job',
+      selector: row => row.todaysjob,
+      sortable: true,
+      cell: row => <span style={{ color: row.todaysjob ? 'inherit' : 'var(--text-muted)' }}>{row.todaysjob || '--'}</span>
     }
   ];
 
