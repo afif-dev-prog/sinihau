@@ -96,11 +96,15 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleResetPassword = async (userId) => {
-    if (!window.confirm("Are you sure you want to reset this user's password to their Staff ID?")) return;
+  const handleResetPassword = async (userId, staffId) => {
+    if (!staffId) {
+      alert("This user does not have a Staff ID to reset to.");
+      return;
+    }
+    if (!window.confirm(`Are you sure you want to reset this user's password to their Staff ID (${staffId})?`)) return;
     try {
-      await api.resetPassword(userId);
-      alert('Password reset successfully to Staff ID.');
+      await api.resetPassword(userId, staffId);
+      alert(`Password reset successfully to ${staffId}.`);
     } catch (err) {
       alert(err.message || 'Failed to reset password');
     }
@@ -301,7 +305,7 @@ export default function AdminDashboard() {
             <MapPinOff size={16} />
           </button>
           <button 
-            onClick={() => handleResetPassword(row.id)}
+            onClick={() => handleResetPassword(row.id, row.staffId)}
             title="Reset Password to Staff ID"
             style={{
               background: 'transparent', border: '1px solid var(--accent-primary)', color: 'var(--accent-primary)',
