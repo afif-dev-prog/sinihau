@@ -99,8 +99,11 @@ export const api = {
     }),
   resetLocation: (userId) =>
     fetchWithAuth(`/admin/users/${userId}/reset-location`, { method: "POST" }),
-  resetPassword: (userId) =>
-    fetchWithAuth(`/admin/users/${userId}/reset-password`, { method: "POST" }),
+  resetPassword: (userId, staffId) =>
+    fetchWithAuth(`/admin/users/${userId}/reset-password`, { 
+      method: "POST",
+      body: JSON.stringify({ password: staffId })
+    }),
   deleteUser: (userId) =>
     fetchWithAuth(`/admin/users/${userId}`, { method: "DELETE" }),
   updateRole: (userId, role) =>

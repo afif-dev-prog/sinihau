@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import Navbar from '../components/Navbar';
 import { api } from '../utils/api';
-import { Users, UserCheck, UserX, Search, Map as MapIcon, Calendar as CalendarIcon, AlertTriangle, Star, Clock, FileSpreadsheet, FileText, PieChart, Download, ChevronDown, ChevronRight } from 'lucide-react';
+import { Users, UserCheck, UserX, Search, Map as MapIcon, Calendar as CalendarIcon, AlertTriangle, Star, Clock, FileSpreadsheet, FileText, PieChart, Download, ChevronDown, ChevronRight, BarChart as BarIcon, TrendingUp } from 'lucide-react';
+import { PieChart as RePieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts';
 import { format } from 'date-fns';
 import { getNowInTargetTimezone, formatTimeInTargetTimezone, isPunctual } from '../utils/dateUtils';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
@@ -38,6 +39,11 @@ export default function HRDashboard() {
   const [hoveredExport, setHoveredExport] = useState(null); // 'date' | 'all'
   const exportRef = React.useRef(null);
 
+  // Real trend data state
+  const [timeRange, setTimeRange] = useState('7d');
+  const [historicalTrends, setHistoricalTrends] = useState([]);
+  const [isLoadingTrends, setIsLoadingTrends] = useState(false);
+
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (exportRef.current && !exportRef.current.contains(event.target)) {
@@ -71,6 +77,61 @@ export default function HRDashboard() {
     return () => clearTimeout(handler);
   }, [search, date]);
 
+  useEffect(() => {
+    if (activeTab === 'interactive') {
+      fetchHistoricalTrends(timeRange === '7d' ? 7 : 30);
+    }
+  }, [activeTab, timeRange]);
+
+  const fetchHistoricalTrends = async (days) => {
+    setIsLoadingTrends(true);
+    try {
+      const now = getNowInTargetTimezone();
+      const results = [];
+      
+      // Batch requests into groups of 5 to avoid browser blocking
+      const batchSize = 5;
+      for (let i = 0; i < days; i += batchSize) {
+        const batchPromises = [];
+        for (let j = i; j < Math.min(i + batchSize, days); j++) {
+           const targetDate = new Date(now.getTime() - (j * 86400 * 1000));
+           const year = targetDate.getFullYear();
+           const month = targetDate.getMonth();
+           const day = targetDate.getDate();
+           
+           // Match the TZ calculation from fetchStaff
+           const tsDay2 = Math.floor(Date.UTC(year, month, day, 0, 0, 0) / 1000);
+           const startOfMYT = (tsDay2 - 86400) + (16 * 3600);
+           const endOfMYT = startOfMYT + 86400;
+
+           batchPromises.push(
+             api.getHrStaff(`?date=${tsDay2}`).then(data => {
+               const presentCount = data.filter(r => 
+                 (r.clockInTime >= startOfMYT && r.clockInTime < endOfMYT) || 
+                 (r.clockOutTime >= startOfMYT && r.clockOutTime < endOfMYT)
+               ).length;
+               
+               return {
+                 date: format(targetDate, 'dd/MM'),
+                 fullDate: format(targetDate, 'yyyy-MM-dd'),
+                 present: presentCount,
+                 dayName: format(targetDate, 'EEE')
+               };
+             }).catch(() => ({ date: format(targetDate, 'dd/MM'), present: 0 }))
+           );
+        }
+        const batchResults = await Promise.all(batchPromises);
+        results.push(...batchResults);
+      }
+      
+      setHistoricalTrends(results.reverse());
+    } catch (err) {
+      console.error('Failed to fetch historical trends:', err);
+    } finally {
+      setIsLoadingTrends(false);
+    }
+  };
+
   const fetchDashboard = async () => {
     try {
       const data = await api.getHrDashboard();
@@ -83,16 +144,62 @@ export default function HRDashboard() {
   const fetchStaff = async () => {
     setLoading(true);
     try {
-      let timestamp = '';
       if (date) {
-        // The backend appears to expect a timestamp that corresponds to the intended date in UTC.
-        // Previously, we tried to send Malaysia midnight, but that resolved to the previous day in UTC.
         const [year, month, day] = date.split('-').map(Number);
-        const dateObj = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
-        timestamp = Math.floor(dateObj.getTime() / 1000);
+        
+        // The backend groups data by exact UTC days. To reconstruct a GMT+8 (Malaysia) day,
+        // we must pull both the selected UTC day and the preceeding UTC day, then strictly 
+        // filter the records on the frontend to exactly match the 00:00 -> 23:59 MYT window.
+        const tsDay2 = Math.floor(Date.UTC(year, month - 1, day, 0, 0, 0) / 1000);
+        const tsDay1 = tsDay2 - 86400;
+
+        const [res1, res2] = await Promise.all([
+          api.getHrStaff(`?search=${search}&date=${tsDay1}`).catch(() => []),
+          api.getHrStaff(`?search=${search}&date=${tsDay2}`).catch(() => [])
+        ]);
+
+        const startOfMYT = tsDay1 + (16 * 3600); // 16:00 UTC previous day -> 00:00 MYT
+        const endOfMYT = startOfMYT + 86400;     // 16:00 UTC current day -> 24:00 MYT
+
+        const userMap = new Map();
+
+        const processRecord = (rec) => {
+            const validIn = rec.clockInTime >= startOfMYT && rec.clockInTime < endOfMYT;
+            const validOut = rec.clockOutTime >= startOfMYT && rec.clockOutTime < endOfMYT;
+            
+            if (validIn || validOut) {
+                const existing = userMap.get(rec.id);
+                const effectiveRec = { ...rec };
+                if (!validIn) effectiveRec.clockInTime = existing?.clockInTime || null;
+                if (!validOut) effectiveRec.clockOutTime = existing?.clockOutTime || null;
+                
+                if (effectiveRec.clockInTime && effectiveRec.clockOutTime) {
+                    effectiveRec.todayStatus = 'Clocked Out';
+                } else if (effectiveRec.clockInTime) {
+                    effectiveRec.todayStatus = 'Clocked In';
+                }
+                
+                userMap.set(rec.id, effectiveRec);
+            } else if (!userMap.has(rec.id)) {
+                userMap.set(rec.id, { 
+                    ...rec, 
+                    clockInTime: null, 
+                    clockOutTime: null, 
+                    todayStatus: 'Not Clocked In',
+                    isBypassed: false,
+                    rating: null
+                });
+            }
+        };
+
+        res1.forEach(processRecord);
+        res2.forEach(processRecord);
+
+        setStaff(Array.from(userMap.values()));
+      } else {
+        const data = await api.getHrStaff(`?search=${search}&date=`);
+        setStaff(data);
       }
-      const data = await api.getHrStaff(`?search=${search}&date=${timestamp}`);
-      setStaff(data);
     } catch (err) {
       console.error(err);
     } finally {
@@ -186,7 +293,7 @@ export default function HRDashboard() {
   };
 
   const top10Punctual = staff
-    .filter(s => s.clockInTime)
+    .filter(s => s.clockInTime && s.todayStatus !== 'Not Clocked In')
     .sort((a, b) => a.clockInTime - b.clockInTime)
     .slice(0, 10);
 
@@ -278,6 +385,18 @@ export default function HRDashboard() {
       name: 'Total Hours',
       selector: row => calculateTotalTime(row.clockInTime, row.clockOutTime),
       sortable: true
+    },
+    {
+      name: 'Remark',
+      selector: row => row.remark,
+      sortable: true,
+      cell: row => <span style={{ color: row.remark ? 'inherit' : 'var(--text-muted)' }}>{row.remark || '--'}</span>
+    },
+    {
+      name: 'Today\'s Job',
+      selector: row => row.todaysjob,
+      sortable: true,
+      cell: row => <span style={{ color: row.todaysjob ? 'inherit' : 'var(--text-muted)' }}>{row.todaysjob || '--'}</span>
     }
   ];
 
@@ -319,222 +438,350 @@ export default function HRDashboard() {
         </div>
 
         {/* Tab Navigation */}
-        <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
+        <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
           <button
             onClick={() => setActiveTab('ledger')}
             style={{
-              padding: '1rem 2rem', borderRadius: 'var(--radius-md)', border: 'none', fontWeight: 'bold', fontSize: '1rem',
+              padding: '1rem 1.5rem', borderRadius: 'var(--radius-md)', border: 'none', fontWeight: 'bold', fontSize: '0.95rem',
               background: activeTab === 'ledger' ? 'var(--accent-glow)' : 'var(--bg-secondary)',
               color: activeTab === 'ledger' ? 'var(--accent-primary)' : 'var(--text-muted)',
-              cursor: 'pointer', transition: 'all 0.2s', flex: isMobile ? 1 : 'none'
+              cursor: 'pointer', transition: 'all 0.2s', flex: isMobile ? 1 : 'none',
+              display: 'flex', alignItems: 'center', gap: '0.5rem'
             }}
           >
-             Attendance Ledger
+             <FileText size={18} /> Attendance Ledger
           </button>
           <button
-            onClick={() => setActiveTab('statistics')}
+            onClick={() => setActiveTab('interactive')}
             style={{
-              padding: '1rem 2rem', borderRadius: 'var(--radius-md)', border: 'none', fontWeight: 'bold', fontSize: '1rem',
-              background: activeTab === 'statistics' ? 'var(--accent-glow)' : 'var(--bg-secondary)',
-              color: activeTab === 'statistics' ? 'var(--accent-primary)' : 'var(--text-muted)',
-              cursor: 'pointer', transition: 'all 0.2s', flex: isMobile ? 1 : 'none'
+              padding: '1rem 1.5rem', borderRadius: 'var(--radius-md)', border: 'none', fontWeight: 'bold', fontSize: '0.95rem',
+              background: activeTab === 'interactive' ? 'var(--accent-glow)' : 'var(--bg-secondary)',
+              color: activeTab === 'interactive' ? 'var(--accent-primary)' : 'var(--text-muted)',
+              cursor: 'pointer', transition: 'all 0.2s', flex: isMobile ? 1 : 'none',
+              display: 'flex', alignItems: 'center', gap: '0.5rem'
             }}
           >
-             Statistics
+             <TrendingUp size={18} /> Interactive Dashboard
+          </button>
+          <button
+            onClick={() => setActiveTab('analytics')}
+            style={{
+              padding: '1rem 1.5rem', borderRadius: 'var(--radius-md)', border: 'none', fontWeight: 'bold', fontSize: '0.95rem',
+              background: activeTab === 'analytics' ? 'var(--accent-glow)' : 'var(--bg-secondary)',
+              color: activeTab === 'analytics' ? 'var(--accent-primary)' : 'var(--text-muted)',
+              cursor: 'pointer', transition: 'all 0.2s', flex: isMobile ? 1 : 'none',
+              display: 'flex', alignItems: 'center', gap: '0.5rem'
+            }}
+          >
+             <BarIcon size={18} /> Analytics
           </button>
         </div>
 
         {activeTab === 'ledger' ? (
           <div className="glass-panel animate-fade-in" style={{ padding: '2rem', animationDelay: '0.3s' }}>
             <div className="flex-between" style={{ 
-              marginBottom: '2rem', 
-            flexDirection: isMobile ? 'column' : 'row', 
-            alignItems: isMobile ? 'stretch' : 'center',
-            gap: '1rem'
-          }}>
-            <h2 style={{ margin: 0 }}>Attendance Ledger</h2>
-            
-            <div style={{ 
-              display: 'flex', 
-              gap: '1rem', 
-              alignItems: 'center', 
-              flexWrap: isMobile ? 'wrap' : 'nowrap', 
-              width: isMobile ? '100%' : 'auto',
-              justifyContent: isMobile ? 'flex-start' : 'flex-end'
+                marginBottom: '2rem', 
+              flexDirection: isMobile ? 'column' : 'row', 
+              alignItems: isMobile ? 'stretch' : 'center',
+              gap: '1rem'
             }}>
-              <div style={{ position: 'relative', width: isMobile ? '100%' : 'auto' }}>
-                <Search size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                <input 
-                  type="text" 
-                  placeholder="Search staff..." 
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  style={{ paddingLeft: '2.5rem', width: isMobile ? '100%' : '200px' }}
-                />
-              </div>
+              <h2 style={{ margin: 0 }}>Attendance Ledger</h2>
               
-              <div style={{ position: 'relative', width: isMobile ? '100%' : 'auto' }}>
-                <CalendarIcon size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                <input 
-                  type="date" 
-                  value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                  style={{ paddingLeft: '2.5rem', width: isMobile ? '100%' : 'auto' }}
-                />
-              </div>
-              
-              <div ref={exportRef} style={{ position: 'relative', width: isMobile ? '100%' : 'auto' }}>
-                <button 
-                  onClick={() => setShowExport(!showExport)}
-                  style={{ 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    gap: '0.6rem', 
-                    padding: '0.75rem 1.25rem', 
-                    background: 'var(--bg-secondary)', 
-                    border: '1px solid var(--border-glass)', 
-                    borderRadius: 'var(--radius-md)',
-                    color: 'var(--text-primary)',
-                    fontWeight: 'bold',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
-                    width: isMobile ? '100%' : 'auto',
-                    justifyContent: 'center'
-                  }}
-                >
-                  <Download size={18} />
-                  <span>Export</span>
-                  <ChevronDown size={16} style={{ transform: showExport ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.2s' }} />
-                </button>
-
-                {showExport && (
-                  <div className="dropdown-menu">
-                    {/* Selected Date Category */}
-                    <div 
-                      onMouseEnter={() => setHoveredExport('date')}
-                      onMouseLeave={() => setHoveredExport(null)}
-                      className="dropdown-item"
-                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                         <CalendarIcon size={14} />
-                         <span>By Date ({date})</span>
-                      </div>
-                      <ChevronRight size={14} />
-                      
-                      {hoveredExport === 'date' && (
-                        <div className="nested-menu" onMouseEnter={() => setHoveredExport('date')}>
-                          <button onClick={() => { handleExportExcel(); setShowExport(false); }} className="dropdown-item">
-                            <FileSpreadsheet size={14} color="var(--success)" /> Excel File
-                          </button>
-                          <button onClick={() => { handleExportPDF(); setShowExport(false); }} className="dropdown-item">
-                            <FileText size={14} color="var(--danger)" /> PDF Report
-                          </button>
-                        </div>
-                      )}
-                    </div>
-
-                    <div style={{ height: '1px', background: 'var(--border-glass)', margin: '0.25rem 0.5rem' }} />
-
-                    {/* All History Category */}
-                    <div 
-                      onMouseEnter={() => setHoveredExport('all')}
-                      onMouseLeave={() => setHoveredExport(null)}
-                      className="dropdown-item"
-                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                         <Users size={14} />
-                         <span>All History</span>
-                      </div>
-                      <ChevronRight size={14} />
-                      
-                      {hoveredExport === 'all' && (
-                        <div className="nested-menu" onMouseEnter={() => setHoveredExport('all')}>
-                          <button onClick={() => { handleExportAllExcel(); setShowExport(false); }} className="dropdown-item">
-                            <FileSpreadsheet size={14} color="var(--success)" /> Excel File
-                          </button>
-                          <button onClick={() => { handleExportAllPDF(); setShowExport(false); }} className="dropdown-item">
-                            <FileText size={14} color="var(--danger)" /> PDF Report
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-
               <div style={{ 
                 display: 'flex', 
-                background: 'var(--bg-secondary)', 
-                borderRadius: 'var(--radius-md)', 
-                border: '1px solid var(--border-glass)', 
-                overflow: 'hidden',
-                marginLeft: isMobile ? 0 : 'auto',
+                gap: '1rem', 
+                alignItems: 'center', 
+                flexWrap: isMobile ? 'wrap' : 'nowrap', 
                 width: isMobile ? '100%' : 'auto',
-                justifyContent: isMobile ? 'center' : 'flex-start'
+                justifyContent: isMobile ? 'flex-start' : 'flex-end'
               }}>
-                <button 
-                  onClick={() => setViewMode('list')}
-                  style={{ 
-                    padding: '0.75rem 1.5rem', 
-                    background: viewMode === 'list' ? 'var(--accent-glow)' : 'transparent',
-                    border: 'none', 
-                    color: viewMode === 'list' ? 'var(--accent-primary)' : 'var(--text-muted)', 
-                    cursor: 'pointer',
-                    flex: isMobile ? 1 : 'none'
-                  }}
-                >
-                  <Users size={18} />
-                </button>
-                <button 
-                  onClick={() => setViewMode('map')}
-                  style={{ 
-                    padding: '0.75rem 1.5rem', 
-                    background: viewMode === 'map' ? 'var(--accent-glow)' : 'transparent',
-                    border: 'none', 
-                    color: viewMode === 'map' ? 'var(--accent-primary)' : 'var(--text-muted)', 
-                    cursor: 'pointer',
-                    flex: isMobile ? 1 : 'none'
-                  }}
-                >
-                  <MapIcon size={18} />
-                </button>
+                <div style={{ position: 'relative', width: isMobile ? '100%' : 'auto' }}>
+                  <Search size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                  <input 
+                    type="text" 
+                    placeholder="Search staff..." 
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    style={{ paddingLeft: '2.5rem', width: isMobile ? '100%' : '200px' }}
+                  />
+                </div>
+                
+                <div style={{ position: 'relative', width: isMobile ? '100%' : 'auto' }}>
+                  <CalendarIcon size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                  <input 
+                    type="date" 
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
+                    style={{ paddingLeft: '2.5rem', width: isMobile ? '100%' : 'auto' }}
+                  />
+                </div>
+                
+                <div ref={exportRef} style={{ position: 'relative', width: isMobile ? '100%' : 'auto' }}>
+                  <button 
+                    onClick={() => setShowExport(!showExport)}
+                    style={{ 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      gap: '0.6rem', 
+                      padding: '0.75rem 1.25rem', 
+                      background: 'var(--bg-secondary)', 
+                      border: '1px solid var(--border-glass)', 
+                      borderRadius: 'var(--radius-md)',
+                      color: 'var(--text-primary)',
+                      fontWeight: 'bold',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                      width: isMobile ? '100%' : 'auto',
+                      justifyContent: 'center'
+                    }}
+                  >
+                    <Download size={18} />
+                    <span>Export</span>
+                    <ChevronDown size={16} style={{ transform: showExport ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.2s' }} />
+                  </button>
+
+                  {showExport && (
+                    <div className="dropdown-menu">
+                      <div 
+                        onMouseEnter={() => setHoveredExport('date')}
+                        onMouseLeave={() => setHoveredExport(null)}
+                        className="dropdown-item"
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                           <CalendarIcon size={14} />
+                           <span>By Date ({date})</span>
+                        </div>
+                        <ChevronRight size={14} />
+                        
+                        {hoveredExport === 'date' && (
+                          <div className="nested-menu" onMouseEnter={() => setHoveredExport('date')}>
+                            <button onClick={() => { handleExportExcel(); setShowExport(false); }} className="dropdown-item">
+                              <FileSpreadsheet size={14} color="var(--success)" /> Excel File
+                            </button>
+                            <button onClick={() => { handleExportPDF(); setShowExport(false); }} className="dropdown-item">
+                              <FileText size={14} color="var(--danger)" /> PDF Report
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      <div style={{ height: '1px', background: 'var(--border-glass)', margin: '0.25rem 0.5rem' }} />
+
+                      <div 
+                        onMouseEnter={() => setHoveredExport('all')}
+                        onMouseLeave={() => setHoveredExport(null)}
+                        className="dropdown-item"
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                           <Users size={14} />
+                           <span>All History</span>
+                        </div>
+                        <ChevronRight size={14} />
+                        
+                        {hoveredExport === 'all' && (
+                          <div className="nested-menu" onMouseEnter={() => setHoveredExport('all')}>
+                            <button onClick={() => { handleExportAllExcel(); setShowExport(false); }} className="dropdown-item">
+                              <FileSpreadsheet size={14} color="var(--success)" /> Excel File
+                            </button>
+                            <button onClick={() => { handleExportAllPDF(); setShowExport(false); }} className="dropdown-item">
+                              <FileText size={14} color="var(--danger)" /> PDF Report
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ 
+                  display: 'flex', 
+                  background: 'var(--bg-secondary)', 
+                  borderRadius: 'var(--radius-md)', 
+                  border: '1px solid var(--border-glass)', 
+                  overflow: 'hidden',
+                  marginLeft: isMobile ? 0 : 'auto',
+                  width: isMobile ? '100%' : 'auto',
+                  justifyContent: isMobile ? 'center' : 'flex-start'
+                }}>
+                  <button 
+                    onClick={() => setViewMode('list')}
+                    style={{ 
+                      padding: '0.75rem 1.5rem', 
+                      background: viewMode === 'list' ? 'var(--accent-glow)' : 'transparent',
+                      border: 'none', 
+                      color: viewMode === 'list' ? 'var(--accent-primary)' : 'var(--text-muted)', 
+                      cursor: 'pointer',
+                      flex: isMobile ? 1 : 'none'
+                    }}
+                  >
+                    <Users size={18} />
+                  </button>
+                  <button 
+                    onClick={() => setViewMode('map')}
+                    style={{ 
+                      padding: '0.75rem 1.5rem', 
+                      background: viewMode === 'map' ? 'var(--accent-glow)' : 'transparent',
+                      border: 'none', 
+                      color: viewMode === 'map' ? 'var(--accent-primary)' : 'var(--text-muted)', 
+                      cursor: 'pointer',
+                      flex: isMobile ? 1 : 'none'
+                    }}
+                  >
+                    <MapIcon size={18} />
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
 
-          {loading ? (
-            <p>Loading records...</p>
-          ) : viewMode === 'list' ? (
-            <ResponsiveTable
-              columns={columns}
-              data={staff}
-              pagination
-            />
-          ) : (
-            <div style={{ height: '500px', width: '100%', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
-              <MapContainer center={defaultCenter} zoom={13} scrollWheelZoom={true} style={{ height: '100%', width: '100%' }}>
-                <TileLayer
-                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                  url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-                />
-                {mapMarkers.map(user => (
-                  <Marker key={user.id} position={[user.home_lat, user.home_lng]}>
-                    <Popup>
-                      <strong>{user.name}</strong><br/>
-                      Status: {user.todayStatus}
-                    </Popup>
-                  </Marker>
-                ))}
-              </MapContainer>
-            </div>
-          )}
-        </div>
+            {loading ? (
+              <p>Loading records...</p>
+            ) : viewMode === 'list' ? (
+              <ResponsiveTable
+                columns={columns}
+                data={staff}
+                pagination
+              />
+            ) : (
+              <div style={{ height: '500px', width: '100%', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+                <MapContainer center={defaultCenter} zoom={13} scrollWheelZoom={true} style={{ height: '100%', width: '100%' }}>
+                  <TileLayer
+                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                    url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+                  />
+                  {mapMarkers.map(user => (
+                    <Marker key={user.id} position={[user.home_lat, user.home_lng]}>
+                      <Popup>
+                        <strong>{user.name}</strong><br/>
+                        Status: {user.todayStatus}
+                      </Popup>
+                    </Marker>
+                  ))}
+                </MapContainer>
+              </div>
+            )}
+          </div>
+        ) : activeTab === 'interactive' ? (
+          <div className="glass-panel animate-fade-in" style={{ padding: '2rem', animationDelay: '0.3s' }}>
+             <div className="flex-between" style={{ marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
+                <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <TrendingUp size={24} color="var(--accent-primary)" /> Interactive Analytics Dashboard
+                </h2>
+                
+                <div style={{ display: 'flex', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', padding: '0.25rem' }}>
+                    <button 
+                       onClick={() => setTimeRange('7d')}
+                       style={{ 
+                          padding: '0.5rem 1rem', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+                          background: timeRange === '7d' ? 'var(--accent-primary)' : 'transparent',
+                          color: timeRange === '7d' ? 'white' : 'var(--text-muted)',
+                          fontWeight: 'bold', transition: 'all 0.2s'
+                       }}
+                    >
+                       Last 7 Days
+                    </button>
+                    <button 
+                       onClick={() => setTimeRange('30d')}
+                       style={{ 
+                          padding: '0.5rem 1rem', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+                          background: timeRange === '30d' ? 'var(--accent-primary)' : 'transparent',
+                          color: timeRange === '30d' ? 'white' : 'var(--text-muted)',
+                          fontWeight: 'bold', transition: 'all 0.2s'
+                       }}
+                    >
+                       Last 30 Days
+                    </button>
+                </div>
+             </div>
+
+             {isLoadingTrends ? (
+                <div style={{ height: '400px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '1rem' }}>
+                   <div className="animate-pulse" style={{ width: '40px', height: '40px', borderRadius: '50%', border: '3px solid var(--accent-primary)', borderTopColor: 'transparent', animation: 'spin 1s linear infinite' }}></div>
+                   <p style={{ color: 'var(--text-muted)' }}>Aggregating 30-day historical logs...</p>
+                </div>
+             ) : (
+                /* Chart Grid */
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '2rem', marginBottom: '2rem' }}>
+                   {/* 1. Presence Overview (Pie Chart) - REAL DATA */}
+                   <div className="glass-panel" style={{ padding: '1.5rem', borderRadius: 'var(--radius-lg)', minHeight: '350px' }}>
+                      <h3 style={{ fontSize: '1.1rem', marginBottom: '1.5rem' }}>Daily Presence Distribution</h3>
+                      <div style={{ height: '250px' }}>
+                         <ResponsiveContainer width="100%" height="100%">
+                            <RePieChart>
+                               <Pie
+                                  data={[
+                                     { name: 'Present', value: distributionStats.clockedIn + distributionStats.clockedOut },
+                                     { name: 'Not Arrived', value: distributionStats.notClockedIn }
+                                  ]}
+                                  cx="50%"
+                                  cy="50%"
+                                  innerRadius={60}
+                                  outerRadius={80}
+                                  paddingAngle={5}
+                                  dataKey="value"
+                               >
+                                  <Cell fill="var(--success)" />
+                                  <Cell fill="var(--danger)" />
+                               </Pie>
+                               <Tooltip 
+                                  contentStyle={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)' }}
+                               />
+                               <Legend verticalAlign="bottom" height={36}/>
+                            </RePieChart>
+                         </ResponsiveContainer>
+                      </div>
+                   </div>
+
+                   {/* 2. Real Attendance Trends (Area Chart) - REAL LOADED DATA */}
+                   <div className="glass-panel" style={{ padding: '1.5rem', borderRadius: 'var(--radius-lg)', minHeight: '350px' }}>
+                      <h3 style={{ fontSize: '1.1rem', marginBottom: '1.5rem' }}>Presence Trends ({timeRange})</h3>
+                      <div style={{ height: '250px' }}>
+                         <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={historicalTrends}>
+                               <defs>
+                                  <linearGradient id="colorPresent" x1="0" y1="0" x2="0" y2="1">
+                                     <stop offset="5%" stopColor="var(--accent-primary)" stopOpacity={0.8}/>
+                                     <stop offset="95%" stopColor="var(--accent-primary)" stopOpacity={0}/>
+                                  </linearGradient>
+                               </defs>
+                               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                               <XAxis dataKey="date" stroke="var(--text-muted)" fontSize={10} tickLine={false} axisLine={false} />
+                               <YAxis stroke="var(--text-muted)" fontSize={10} tickLine={false} axisLine={false} />
+                               <Tooltip 
+                                  contentStyle={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)' }}
+                               />
+                               <Area type="monotone" dataKey="present" stroke="var(--accent-primary)" fillOpacity={1} fill="url(#colorPresent)" strokeWidth={2} />
+                            </AreaChart>
+                         </ResponsiveContainer>
+                      </div>
+                   </div>
+
+                   {/* 3. Daily Breakdown (Bar Chart) - REAL LOADED DATA */}
+                   <div className="glass-panel" style={{ padding: '1.5rem', borderRadius: 'var(--radius-lg)', gridColumn: isMobile ? 'span 1' : 'span 2' }}>
+                      <h3 style={{ fontSize: '1.1rem', marginBottom: '1.5rem' }}>Daily Attendance Volume</h3>
+                      <div style={{ height: '300px' }}>
+                         <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={historicalTrends}>
+                               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                               <XAxis dataKey="date" stroke="var(--text-muted)" fontSize={10} tickLine={false} axisLine={false} />
+                               <YAxis stroke="var(--text-muted)" fontSize={10} tickLine={false} axisLine={false} />
+                               <Tooltip 
+                                  cursor={{fill: 'rgba(255,255,255,0.02)'}}
+                                  contentStyle={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)' }}
+                               />
+                               <Bar dataKey="present" fill="var(--success)" radius={[4, 4, 0, 0]} barSize={timeRange === '7d' ? 40 : 15} />
+                            </BarChart>
+                         </ResponsiveContainer>
+                      </div>
+                   </div>
+                </div>
+             )}
+          </div>
         ) : (
           <div className="glass-panel animate-fade-in" style={{ padding: '2rem', animationDelay: '0.3s' }}>
              <div className="flex-between" style={{ marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
-               <h2 style={{ margin: 0 }}>Attendance Statistics</h2>
+               <h2 style={{ margin: 0 }}>Attendance Analytics</h2>
                <div style={{ 
                  display: 'flex', 
                  gap: '1rem', 
@@ -733,6 +980,7 @@ export default function HRDashboard() {
                        <th style={{ width: '60px' }}>Rank</th>
                        <th>Name</th>
                        <th>Clock In</th>
+                       <th>Clock Out</th>
                        <th>Status</th>
                      </tr>
                    </thead>
@@ -741,12 +989,12 @@ export default function HRDashboard() {
                        <tr key={person.id} style={{ opacity: idx < 3 ? 1 : 0.8 }}>
                          <td>
                             <span style={{ 
-                              display: 'inline-flex', width: '28px', height: '28px', borderRadius: '50%', 
-                              background: idx === 0 ? '#ffd70033' : idx === 1 ? '#dfe6e933' : idx === 2 ? '#cd7f3233' : 'rgba(255,255,255,0.05)',
-                              color: idx === 0 ? '#ffd700' : idx === 1 ? '#dfe6e9' : idx === 2 ? '#cd7f32' : 'var(--text-muted)',
-                              alignItems: 'center', justifyContent: 'center', fontWeight: 'bold'
+                               display: 'inline-flex', width: '28px', height: '28px', borderRadius: '50%', 
+                               background: idx === 0 ? '#ffd70033' : idx === 1 ? '#dfe6e933' : idx === 2 ? '#cd7f3233' : 'rgba(255,255,255,0.05)',
+                               color: idx === 0 ? '#ffd700' : idx === 1 ? '#dfe6e9' : idx === 2 ? '#cd7f32' : 'var(--text-muted)',
+                               alignItems: 'center', justifyContent: 'center', fontWeight: 'bold'
                             }}>
-                              {idx + 1}
+                               {idx + 1}
                             </span>
                          </td>
                          <td>
@@ -761,14 +1009,21 @@ export default function HRDashboard() {
                          <td style={{ fontWeight: 'bold', color: idx === 0 ? 'var(--success)' : 'inherit' }}>
                            {formatTimeInTargetTimezone(person.clockInTime)}
                          </td>
+                         <td style={{ color: 'var(--text-muted)' }}>
+                           {formatTimeInTargetTimezone(person.clockOutTime)}
+                         </td>
                          <td>
-                            <span className="badge success" style={{ fontSize: '0.7rem' }}>Punctual</span>
+                            {isPunctual(person.clockInTime, 8, 0) ? (
+                              <span className="badge success" style={{ fontSize: '0.7rem' }}>Punctual</span>
+                            ) : (
+                              <span className="badge danger" style={{ fontSize: '0.7rem' }}>Late</span>
+                            )}
                          </td>
                        </tr>
                      ))}
                      {top10Punctual.length === 0 && (
                        <tr>
-                         <td colSpan="4" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>No punctuality records for this date.</td>
+                         <td colSpan="5" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>No punctuality records for this date.</td>
                        </tr>
                      )}
                    </tbody>
